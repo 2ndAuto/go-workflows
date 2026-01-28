@@ -107,6 +107,11 @@ func (w *Worker[Task, TaskResult]) poller(ctx context.Context) {
 		defer ticker.Stop()
 	}
 
+	// Track when polling failures started for escalating log levels.
+	// If polling fails continuously for longer than this threshold, log errors instead of warnings.
+	const pollErrorThreshold = 30 * time.Second
+	var pollFailingSince time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,10 +129,20 @@ func (w *Worker[Task, TaskResult]) poller(ctx context.Context) {
 		task, err := w.poll(ctx, 30*time.Second)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
-				w.logger.ErrorContext(ctx, "error polling task", "error", err)
+				now := time.Now()
+				if pollFailingSince.IsZero() {
+					pollFailingSince = now
+				}
+
+				if now.Sub(pollFailingSince) >= pollErrorThreshold {
+					w.logger.ErrorContext(ctx, "error polling task", "error", err)
+				} else {
+					w.logger.WarnContext(ctx, "error polling task", "error", err)
+				}
 				w.taskQueue.release()
 			}
 		} else if task != nil {
+			pollFailingSince = time.Time{}
 			if err := w.taskQueue.add(ctx, task); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					w.logger.ErrorContext(ctx, "error adding task to queue", "error", err)
@@ -137,6 +152,7 @@ func (w *Worker[Task, TaskResult]) poller(ctx context.Context) {
 			continue // check for new tasks right away
 		} else {
 			// Did not use the reserved slot, release
+			pollFailingSince = time.Time{}
 			w.taskQueue.release()
 		}
 
