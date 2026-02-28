@@ -109,7 +109,7 @@ func (w *Worker[Task, TaskResult]) poller(ctx context.Context) {
 
 	// Track when polling failures started for escalating log levels.
 	// If polling fails continuously for longer than this threshold, log errors instead of warnings.
-	const pollErrorThreshold = 30 * time.Second
+	const pollErrorThreshold = 60 * time.Second
 	var pollFailingSince time.Time
 
 	for {
