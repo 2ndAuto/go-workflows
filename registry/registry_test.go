@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/cschleiden/go-workflows/internal/fn"
@@ -233,4 +234,65 @@ func Test_ActivityRegistrationOnStruct_Invalid(t *testing.T) {
 	}
 	err := r.RegisterActivity(a)
 	require.Error(t, err)
+}
+
+type reg_dupe_activities_one struct {
+	Value string
+}
+
+func (r *reg_dupe_activities_one) SharedName(ctx context.Context) (string, error) {
+	return "one:" + r.Value, nil
+}
+
+type reg_dupe_activities_two struct {
+	Value string
+}
+
+func (r *reg_dupe_activities_two) SharedName(ctx context.Context) (string, error) {
+	return "two:" + r.Value, nil
+}
+
+func Test_RegisterActivityOnStruct_SameMethodName_RoutesToNamespacedActivities(t *testing.T) {
+	r := New()
+	require.NotNil(t, r)
+
+	a := &reg_dupe_activities_one{
+		Value: "alpha",
+	}
+	b := &reg_dupe_activities_two{
+		Value: "beta",
+	}
+
+	err := r.RegisterActivity(a)
+	require.NoError(t, err)
+
+	err = r.RegisterActivity(b)
+	require.NoError(t, err)
+
+	methodA, ok := reflect.TypeOf(a).MethodByName("SharedName")
+	require.True(t, ok)
+	methodB, ok := reflect.TypeOf(b).MethodByName("SharedName")
+	require.True(t, ok)
+
+	nameA := methodActivityName(reflect.TypeOf(a), methodA)
+	nameB := methodActivityName(reflect.TypeOf(b), methodB)
+	require.NotEqual(t, nameA, nameB)
+
+	xA, err := r.GetActivity(nameA)
+	require.NoError(t, err)
+	xB, err := r.GetActivity(nameB)
+	require.NoError(t, err)
+
+	aFn, ok := xA.(func(context.Context) (string, error))
+	require.True(t, ok)
+	bFn, ok := xB.(func(context.Context) (string, error))
+	require.True(t, ok)
+
+	gotA, err := aFn(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "one:alpha", gotA)
+
+	gotB, err := bFn(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "two:beta", gotB)
 }

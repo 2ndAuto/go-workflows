@@ -2,6 +2,9 @@ package workflow
 
 import (
 	"fmt"
+	"reflect"
+	"runtime"
+	"strings"
 
 	"github.com/cschleiden/go-workflows/core"
 	a "github.com/cschleiden/go-workflows/internal/args"
@@ -59,6 +62,10 @@ func executeActivity[TResult any](ctx Context, options ActivityOptions, attempt 
 		}
 
 		name = fn.Name(activity)
+		rawName := runtime.FuncForPC(reflect.ValueOf(activity).Pointer()).Name()
+		if rawName != "" && strings.HasSuffix(rawName, "-fm") {
+			name = strings.TrimSuffix(rawName, "-fm")
+		}
 	}
 
 	cv := contextvalue.Converter(ctx)
