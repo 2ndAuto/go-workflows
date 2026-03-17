@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/cschleiden/go-workflows/internal/args"
@@ -126,11 +128,41 @@ func (r *Registry) registerActivitiesFromStruct(a interface{}) error {
 			return err
 		}
 
-		name := mt.Name
-		r.activityMap[name] = mv.Interface()
+		// Keep method namespaced by receiver to prevent collisions between packages with same method names.
+		fullName := strings.TrimSuffix(runtime.FuncForPC(mv.Pointer()).Name(), "-fm")
+		if fullName == "" || strings.Contains(fullName, "reflect.methodValueCall") {
+			fullName = methodActivityName(t, mt)
+		}
+
+		if _, exists := r.activityMap[fullName]; exists {
+			return &ErrActivityAlreadyRegistered{fmt.Sprintf("activity with name %q already registered", fullName)}
+		}
+		r.activityMap[fullName] = mv.Interface()
+
+		// Preserve legacy short method-name lookups for backward compatibility when possible.
+		shortName := mt.Name
+		if _, exists := r.activityMap[shortName]; !exists {
+			r.activityMap[shortName] = mv.Interface()
+		}
 	}
 
 	return nil
+}
+
+func methodActivityName(t reflect.Type, m reflect.Method) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	if t.PkgPath() == "" || t.Name() == "" {
+		return m.Name
+	}
+
+	if t.Kind() == reflect.Struct {
+		return fmt.Sprintf("%s.(*%s).%s", t.PkgPath(), t.Name(), m.Name)
+	}
+
+	return fmt.Sprintf("%s.%s.%s", t.PkgPath(), t.Name(), m.Name)
 }
 
 func checkActivity(actType reflect.Type) error {
@@ -167,6 +199,18 @@ func (r *Registry) GetActivity(name string) (interface{}, error) {
 
 	if activity, ok := r.activityMap[name]; ok {
 		return activity, nil
+	}
+
+	// Backward compatibility: tolerate bound method naming differences by falling back to the short method name.
+	name = strings.TrimSuffix(name, "-fm")
+	if activity, ok := r.activityMap[name]; ok {
+		return activity, nil
+	}
+
+	if idx := strings.LastIndex(name, "."); idx != -1 && idx+1 < len(name) {
+		if activity, ok := r.activityMap[name[idx+1:]]; ok {
+			return activity, nil
+		}
 	}
 
 	return nil, errors.New("activity not found")
